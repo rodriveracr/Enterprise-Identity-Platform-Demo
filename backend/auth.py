@@ -1,4 +1,3 @@
-from pydantic import BaseModel
 from passlib.context import CryptContext
 from jose import jwt
 from datetime import datetime, timedelta
@@ -7,14 +6,6 @@ import os
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret")
 ALGORITHM = "HS256"
-
-
-class UserCreate(BaseModel):
-    username: str
-    password: str
-
-
-users = {}
 
 
 def get_password_hash(password: str) -> str:

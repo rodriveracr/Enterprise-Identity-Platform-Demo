@@ -1,15 +1,15 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-from passlib.context import CryptContext
-from jose import jwt
 from datetime import datetime, timedelta
 import os
 
-app = FastAPI()
+from sqlalchemy.exc import IntegrityError
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-JWT_SECRET = os.getenv("SECRET_KEY", "dev-secret")
-JWT_ALGORITHM = "HS256"
+from .db import engine, SessionLocal
+from . import models
+from .auth import get_password_hash, verify_password, create_access_token
+
+app = FastAPI()
 
 
 class UserIn(BaseModel):
@@ -17,33 +17,43 @@ class UserIn(BaseModel):
     password: str
 
 
-fake_user_db = {}
+@app.on_event("startup")
+def on_startup():
+    models.Base.metadata.create_all(bind=engine)
 
 
 @app.get("/health")
-async def health():
+def health():
     return {"status": "ok"}
 
 
-def create_access_token(sub: str, expires_minutes: int = 60):
-    to_encode = {"sub": sub, "exp": datetime.utcnow() + timedelta(minutes=expires_minutes)}
-    return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-
 @app.post("/auth/register")
-async def register(user: UserIn):
-    if user.username in fake_user_db:
+def register(user: UserIn):
+    db = SessionLocal()
+    try:
+        hashed = get_password_hash(user.password)
+        db_user = models.User(username=user.username, hashed_password=hashed)
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        return {"msg": "user created", "id": db_user.id}
+    except IntegrityError:
+        db.rollback()
         raise HTTPException(status_code=400, detail="User exists")
-    hashed = pwd_context.hash(user.password)
-    fake_user_db[user.username] = {"username": user.username, "password": hashed}
-    return {"msg": "user created"}
+    finally:
+        db.close()
 
 
 @app.post("/auth/login")
-async def login(user: UserIn):
-    record = fake_user_db.get(user.username)
-    if not record or not pwd_context.verify(user.password, record["password"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token(user.username)
-    return {"access_token": token, "token_type": "bearer"}
+def login(user: UserIn):
+    db = SessionLocal()
+    try:
+        db_user = db.query(models.User).filter(models.User.username == user.username).first()
+        if not db_user or not verify_password(user.password, db_user.hashed_password):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        token = create_access_token(user.username)
+        return {"access_token": token, "token_type": "bearer"}
+    finally:
+        db.close()
+
 
